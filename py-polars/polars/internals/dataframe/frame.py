@@ -33,6 +33,7 @@ from polars.datatypes import (
     INTEGER_DTYPES,
     N_INFER_DEFAULT,
     Boolean,
+    Categorical,
     DataTypeClass,
     Float64,
     Int8,
@@ -105,6 +106,8 @@ else:
     from typing_extensions import Concatenate, ParamSpec, TypeAlias
 
 if TYPE_CHECKING:
+    from pyarrow.interchange.dataframe import _PyArrowDataFrame
+
     from polars.internals.type_aliases import (
         AsofJoinStrategy,
         AvroCompression,
@@ -1126,6 +1129,42 @@ class DataFrame:
         """
         return dict(zip(self.columns, self.dtypes))
 
+    def __dataframe__(
+        self, nan_as_null: bool = False, allow_copy: bool = True
+    ) -> _PyArrowDataFrame:
+        """
+        Convert to a dataframe object implementing the dataframe interchange protocol.
+
+        Parameters
+        ----------
+        nan_as_null
+            Overwrite null values in the data with ``NaN``.
+        allow_copy
+            Allow memory to be copied to perform the conversion. If set to False, causes
+            conversions that are not zero-copy to fail.
+
+        Notes
+        -----
+        Details on the dataframe interchange protocol:
+        https://data-apis.org/dataframe-protocol/latest/index.html
+
+        `nan_as_null` currently has no effect; once support for nullable extension
+        dtypes is added, this value should be propagated to columns.
+
+        """
+        if not _PYARROW_AVAILABLE or int(pa.__version__.split(".")[0]) < 11:
+            raise ImportError(
+                "pyarrow>=11.0.0 is required for converting a Polars dataframe to a"
+                " dataframe interchange object."
+            )
+        if not allow_copy and Categorical in self.schema.values():
+            raise NotImplementedError(
+                "Polars does not offer zero-copy conversion to Arrow for categorical"
+                " columns. Set `allow_copy=True` or cast categorical columns to"
+                " string first."
+            )
+        return self.to_arrow().__dataframe__(nan_as_null, allow_copy)
+
     def _comp(self, other: Any, op: ComparisonOperator) -> DataFrame:
         """Compare a DataFrame with another object."""
         if isinstance(other, DataFrame):
@@ -1834,9 +1873,13 @@ class DataFrame:
 
     def to_dicts(self) -> list[dict[str, Any]]:
         """
-        Convert every row to a dictionary.
+        Convert every row to a dictionary of python-native values.
 
-        Note that this is slow.
+        Notes
+        -----
+        If you have ``ns``-precision temporal values you should be aware that python
+        natively only supports up to ``us``-precision; if this matters you should export
+        to a different format.
 
         Examples
         --------
@@ -3637,6 +3680,9 @@ class DataFrame:
 
         - "1i"      # length 1
         - "10i"     # length 10
+
+        .. warning::
+            The index column must be sorted in ascending order.
 
         Parameters
         ----------
@@ -6695,7 +6741,7 @@ class DataFrame:
 
     def rows(self, named: bool = False) -> list[tuple[Any, ...]] | list[dict[str, Any]]:
         """
-        Returns all data in the DataFrame as a list of rows.
+        Returns all data in the DataFrame as a list of rows of python-native values.
 
         Parameters
         ----------
@@ -6704,14 +6750,20 @@ class DataFrame:
             column name to row value. This is more expensive than returning a regular
             tuple, but allows for accessing values by column name.
 
-        Returns
-        -------
-        A list of tuples (default) or dictionaries of row values.
+        Notes
+        -----
+        If you have ``ns``-precision temporal values you should be aware that python
+        natively only supports up to ``us``-precision; if this matters you should export
+        to a different format.
 
         Warnings
         --------
         Row-iteration is not optimal as the underlying data is stored in columnar form;
         where possible, prefer export via one of the dedicated export/output methods.
+
+        Returns
+        -------
+        A list of tuples (default) or dictionaries of row values.
 
         Examples
         --------
@@ -6754,7 +6806,7 @@ class DataFrame:
         self, named: bool = False, buffer_size: int = 500
     ) -> Iterator[tuple[Any, ...]] | Iterator[dict[str, Any]]:
         """
-        Returns an iterator over the rows of the DataFrame.
+        Returns an iterator over the DataFrame of rows of python-native values.
 
         Parameters
         ----------
@@ -6769,19 +6821,20 @@ class DataFrame:
             the speedup from using the buffer is significant (~2-4x). Setting this
             value to zero disables row buffering.
 
-        Returns
-        -------
-        An iterator of tuples (default) or dictionaries of row values.
+        Notes
+        -----
+        If you have ``ns``-precision temporal values you should be aware that python
+        natively only supports up to ``us``-precision; if this matters you should export
+        to a different format.
 
         Warnings
         --------
         Row iteration is not optimal as the underlying data is stored in columnar form;
         where possible, prefer export via one of the dedicated export/output methods.
 
-        Notes
-        -----
-        If you are planning to materialise all frame data at once you should prefer
-        calling ``rows()``, which will be faster.
+        Returns
+        -------
+        An iterator of tuples (default) or dictionaries of python row values.
 
         Examples
         --------
@@ -6807,9 +6860,15 @@ class DataFrame:
         # note: buffering rows results in a 2-4x speedup over individual calls
         # to ".row(i)", so it should only be disabled in extremely specific cases.
         if buffer_size:
+            load_pyarrow_dicts = (
+                named
+                and _PYARROW_AVAILABLE
+                # note: 'ns' precision instantiates values as pandas types - avoid
+                and not any((getattr(tp, "tu", None) == "ns") for tp in self.dtypes)
+            )
             for offset in range(0, self.height, buffer_size):
                 zerocopy_slice = self.slice(offset, buffer_size)
-                if named and _PYARROW_AVAILABLE:
+                if load_pyarrow_dicts:
                     yield from zerocopy_slice.to_arrow().to_batches()[0].to_pylist()
                 else:
                     rows_chunk = zerocopy_slice.rows(named=False)

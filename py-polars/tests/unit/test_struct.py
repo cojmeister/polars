@@ -9,6 +9,7 @@ import pyarrow as pa
 import pytest
 
 import polars as pl
+from polars.testing import assert_frame_equal
 
 
 def test_struct_various() -> None:
@@ -23,7 +24,7 @@ def test_struct_various() -> None:
     assert s.struct.field("list").to_list() == [[1, 2], [3]]
     assert s.struct.field("int").to_list() == [1, 2]
 
-    assert df.to_struct("my_struct").struct.unnest().frame_equal(df)
+    assert_frame_equal(df.to_struct("my_struct").struct.unnest(), df)
     assert s.struct._ipython_key_completions_() == s.struct.fields
 
 
@@ -53,7 +54,7 @@ def test_apply_unnest() -> None:
         }
     )
 
-    assert df.frame_equal(expected)
+    assert_frame_equal(df, expected)
 
 
 def test_rename_fields() -> None:
@@ -85,7 +86,7 @@ def test_struct_unnesting() -> None:
         }
     )
 
-    assert out.frame_equal(expected)
+    assert_frame_equal(out, expected)
 
     out = (
         df.lazy()
@@ -101,7 +102,7 @@ def test_struct_unnesting() -> None:
         .unnest("foo")
         .collect()
     )
-    out.frame_equal(expected)
+    assert_frame_equal(out, expected)
 
 
 def test_struct_function_expansion() -> None:
@@ -701,9 +702,9 @@ def test_concat_list_reverse_struct_fields() -> None:
             pl.struct(["nums", "letters"]).alias("reverse_combo"),
         ]
     )
-    assert df.select(pl.concat_list(["combo", "reverse_combo"])).frame_equal(
-        df.select(pl.concat_list(["combo", "combo"]))
-    )
+    result1 = df.select(pl.concat_list(["combo", "reverse_combo"]))
+    result2 = df.select(pl.concat_list(["combo", "combo"]))
+    assert_frame_equal(result1, result2)
 
 
 def test_struct_any_value_get_after_append() -> None:

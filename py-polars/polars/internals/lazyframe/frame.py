@@ -19,7 +19,6 @@ from typing import (
 )
 
 from polars import internals as pli
-from polars.cfg import Config
 from polars.datatypes import (
     DTYPE_TEMPORAL_UNITS,
     N_INFER_DEFAULT,
@@ -1885,6 +1884,9 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         - "1i"      # length 1
         - "10i"     # length 10
 
+        .. warning::
+            The index column must be sorted in ascending order.
+
         Parameters
         ----------
         index_column
@@ -2573,14 +2575,9 @@ naive plan: (run LazyFrame.describe_optimized_plan() to see the optimized plan)
         └─────┴──────┴─────────────┘
 
         """
-        if named_exprs and not Config.with_columns_kwargs:
-            raise RuntimeError(
-                "**kwargs support requires `pl.Config.with_columns_kwargs = True`"
-            )
-        elif exprs is None and not named_exprs:
+        if exprs is None and not named_exprs:
             raise ValueError("Expected at least one of 'exprs' or **named_exprs")
-
-        if exprs is None:
+        elif exprs is None:
             exprs = []
         elif isinstance(exprs, pli.Expr):
             exprs = [exprs]
